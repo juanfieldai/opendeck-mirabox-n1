@@ -2,7 +2,7 @@
   "Name": "Mirabox N1",
   "Description": "Device support plugin for Mirabox N1",
   "Author": "Sergey Ovechkin",
-  "Version": "0.2.0",
+  "Version": "0.2.1",
   "PluginUUID": "com.github.pomeo.opendeck-mirabox-n1",
   "CodePathLin": "opendeck-mirabox-n1-linux",
   "CodePathMac": "opendeck-mirabox-n1-mac",

@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-07-04
+
+- Recognize the `0300:3007` N1 variant
+
 ## [0.2.0] - 2026-06-26
 
 - Automatically recover the device after the host resumes from suspend: the N1 is fully
