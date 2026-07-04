@@ -1,3 +1,7 @@
 SUBSYSTEM=="usb", ATTRS{idVendor}=="6603", ATTRS{idProduct}=="1000", MODE="0660", TAG+="uaccess"
 
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="6603", ATTRS{idProduct}=="1000", MODE="0660", TAG+="uaccess"
+
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0300", ATTRS{idProduct}=="3007", MODE="0660", TAG+="uaccess"
+
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0300", ATTRS{idProduct}=="3007", MODE="0660", TAG+="uaccess"

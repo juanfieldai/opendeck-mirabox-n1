@@ -18,26 +18,45 @@ pub enum Kind {
     N1,
 }
 
-pub const MIRABOX_VID: u16 = 0x6603;
+// All N1 variants expose their vendor HID interface on usage page 65440 / usage id 1
+// (confirmed from the device's HID report descriptor).
+const USAGE_PAGE: u16 = 65440;
+const USAGE_ID: u16 = 1;
 
-pub const N1_PID: u16 = 0x1000;
+/// A supported device: its USB vendor/product id and the `Kind` that drives it. To support
+/// another unit, add a row here and a matching udev rule — `QUERIES` and `Kind::from_vid_pid`
+/// are both derived from this table.
+pub struct DeviceSpec {
+    pub vid: u16,
+    pub pid: u16,
+    pub kind: Kind,
+}
 
-// Map all queries to usage page 65440 and usage id 1 (confirmed from the device's HID report descriptor)
-pub const N1_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MIRABOX_VID, N1_PID);
+pub const SPECS: &[DeviceSpec] = &[
+    DeviceSpec { vid: 0x6603, pid: 0x1000, kind: Kind::N1 },
+    DeviceSpec { vid: 0x0300, pid: 0x3007, kind: Kind::N1 },
+];
 
-pub const QUERIES: [DeviceQuery; 1] = [N1_QUERY];
+/// HID queries for every supported device, derived from `SPECS`.
+pub const QUERIES: [DeviceQuery; SPECS.len()] = {
+    const SEED: DeviceQuery = DeviceQuery::new(USAGE_PAGE, USAGE_ID, 0, 0);
+
+    let mut queries = [SEED; SPECS.len()];
+    let mut i = 0;
+    while i < SPECS.len() {
+        queries[i] = DeviceQuery::new(USAGE_PAGE, USAGE_ID, SPECS[i].vid, SPECS[i].pid);
+        i += 1;
+    }
+    queries
+};
 
 impl Kind {
     /// Matches devices VID+PID pairs to correct kinds
     pub fn from_vid_pid(vid: u16, pid: u16) -> Option<Self> {
-        match vid {
-            MIRABOX_VID => match pid {
-                N1_PID => Some(Kind::N1),
-                _ => None,
-            },
-
-            _ => None,
-        }
+        SPECS
+            .iter()
+            .find(|spec| spec.vid == vid && spec.pid == pid)
+            .map(|spec| spec.kind.clone())
     }
 
     /// There is no point relying on manufacturer/device names reported by the USB stack,
