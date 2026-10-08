@@ -71,7 +71,7 @@ Requests are newline-delimited JSON; each gets one reply line, `{"ok":true}` or
 - `device` is the OpenDeck device ID the plugin sees in `willAppear`.
 
 Clients should keep sending the same image through OpenDeck's `setImage` for the editor
-preview and as the fallback. [Muxboard](https://github.com/juanfieldai/muxboard) is a client.
+preview and as the fallback. [Muxboard](https://github.com/juanfieldai/muxboard-opendeck) is a client.
 
 ## Layout and display geometry
 
