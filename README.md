@@ -36,6 +36,8 @@ canvas. There are no three-tile aliases or encoder display slots. Images and cle
 Keypad 15/16 or Encoder 0 are ignored, so input actions cannot overwrite the LCD.
 Clearing Infobar 0 writes and flushes a black 450×85 JPEG rather than a CLE slot command.
 
+**Display-quality limitation:** OpenDeck 2.14.0 rasterizes the Infobar at 248×58 and this driver enlarges that JPEG to 450×85. The actual HID upload was captured and decoded at 450×85, but enlarging cannot recover text detail lost in the frontend. A native-resolution vector render sent directly is sharper; automatic native-resolution rendering requires fixing the OpenDeck canvas resolution, not claiming a JPEG resize solves it. No such core rendering fix is included in this fork.
+
 ## Breaking profile migration (0.3.0)
 
 Back up your profiles before installing. Disable or remove the upstream N1 device plugin:
