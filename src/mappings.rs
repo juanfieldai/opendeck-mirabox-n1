@@ -15,7 +15,10 @@ pub const TOUCHPOINT_COUNT: usize = 2;
 pub const INPUT_KEY_COUNT: usize = KEY_COUNT + TOUCHPOINT_COUNT;
 pub const ENCODER_COUNT: usize = 1;
 pub const INFOBAR_COUNT: usize = 1;
+/// Calibrated full-LCD canvas on MSD NEO firmware V3.MSD-NEO.02.011.
+/// Mirajazz index 15 becomes BAT wire slot 16; it is not an encoder display.
 pub const LCD_IMAGE_INDEX: u8 = 15;
+pub const LCD_SIZE: (u32, u32) = (450, 85);
 
 #[derive(Debug, Clone)]
 pub enum Kind {
@@ -96,17 +99,6 @@ impl Kind {
         ImageFormat {
             mode: ImageMode::JPEG,
             size: (108, 104),
-            rotation: ImageRotation::Rot0,
-            mirror: ImageMirroring::None,
-        }
-    }
-
-    /// Calibrated full-LCD canvas on MSD NEO firmware V3.MSD-NEO.02.011.
-    /// Mirajazz index 15 becomes BAT wire slot 16; it is not an encoder display.
-    pub fn infobar_image_format(&self) -> ImageFormat {
-        ImageFormat {
-            mode: ImageMode::JPEG,
-            size: (450, 85),
             rotation: ImageRotation::Rot0,
             mirror: ImageMirroring::None,
         }

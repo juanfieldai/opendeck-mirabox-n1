@@ -1,5 +1,5 @@
 use data_url::DataUrl;
-use image::{DynamicImage, RgbImage, load_from_memory_with_format};
+use image::{DynamicImage, RgbImage, codecs::jpeg::JpegEncoder, imageops::FilterType, load_from_memory_with_format};
 use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate, types::ImageFormat};
 use openaction::{OUTBOUND_EVENT_MANAGER, SetImageEvent};
 use std::time::{Duration, SystemTime};
@@ -7,8 +7,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     DEVICES, TOKENS,
-    mappings::{COL_COUNT, CandidateDevice, ENCODER_COUNT, INFOBAR_COUNT, INPUT_KEY_COUNT, KEY_COUNT, Kind, LCD_IMAGE_INDEX, ROW_COUNT, TOUCHPOINT_COUNT},
+    mappings::{COL_COUNT, CandidateDevice, ENCODER_COUNT, INFOBAR_COUNT, INPUT_KEY_COUNT, KEY_COUNT, Kind, LCD_IMAGE_INDEX, LCD_SIZE, ROW_COUNT, TOUCHPOINT_COUNT},
 };
+
+/// Hardware JPEG for the full LCD: 4:4:4 (image crate default), q95 already accepted on hardware.
+const LCD_JPEG_QUALITY: u8 = 95;
 
 /// Keep-alive loop period.
 const KEEPALIVE_PERIOD: Duration = Duration::from_secs(2);
@@ -276,6 +279,7 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
 /// without opening a HID handle.
 trait ImageOutput {
     async fn draw(&self, index: u8, format: ImageFormat, image: DynamicImage) -> Result<(), MirajazzError>;
+    async fn write_jpeg(&self, index: u8, jpeg: &[u8]) -> Result<(), MirajazzError>;
     async fn clear_key(&self, index: u8) -> Result<(), MirajazzError>;
     async fn clear_keys(&self) -> Result<(), MirajazzError>;
     async fn flush_images(&self) -> Result<(), MirajazzError>;
@@ -284,6 +288,10 @@ trait ImageOutput {
 impl ImageOutput for Device {
     async fn draw(&self, index: u8, format: ImageFormat, image: DynamicImage) -> Result<(), MirajazzError> {
         self.set_button_image(index, format, image).await
+    }
+
+    async fn write_jpeg(&self, index: u8, jpeg: &[u8]) -> Result<(), MirajazzError> {
+        self.write_image(index, jpeg).await
     }
 
     async fn clear_key(&self, index: u8) -> Result<(), MirajazzError> {
@@ -299,36 +307,57 @@ impl ImageOutput for Device {
     }
 }
 
+/// Accepts JPEG and lossless PNG frames; the LCD is encoded only once, by `encode_lcd`.
 fn decode_image(image: &str) -> Result<DynamicImage, MirajazzError> {
     let url = DataUrl::process(image).map_err(|_| MirajazzError::BadData)?;
-    if url.mime_type().type_ != "image" || url.mime_type().subtype != "jpeg" {
-        return Err(MirajazzError::BadData);
-    }
+    let format = match (url.mime_type().type_.as_str(), url.mime_type().subtype.as_str()) {
+        ("image", "jpeg") => image::ImageFormat::Jpeg,
+        ("image", "png") => image::ImageFormat::Png,
+        _ => return Err(MirajazzError::BadData),
+    };
     let (body, _) = url.decode_to_vec().map_err(|_| MirajazzError::BadData)?;
-    Ok(load_from_memory_with_format(&body, image::ImageFormat::Jpeg)?)
+    Ok(load_from_memory_with_format(&body, format)?)
 }
 
-async fn draw_lcd(output: &impl ImageOutput, kind: &Kind, image: Option<String>) -> Result<(), MirajazzError> {
-    let format = kind.infobar_image_format();
+/// Composites over black (as a canvas JPEG export does), resamples only off-size input,
+/// and avoids mirajazz's nearest-neighbour resize and q90 encode.
+fn encode_lcd(image: DynamicImage) -> Result<Vec<u8>, MirajazzError> {
+    let (width, height) = LCD_SIZE;
+    let mut pixels = RgbImage::new(image.width(), image.height());
+    for (target, source) in pixels.pixels_mut().zip(image.to_rgba8().pixels()) {
+        let [r, g, b, a] = source.0;
+        target.0 = [r, g, b].map(|channel| ((channel as u16 * a as u16 + 127) / 255) as u8);
+    }
+    let pixels = if pixels.dimensions() == LCD_SIZE {
+        pixels
+    } else {
+        image::imageops::resize(&pixels, width, height, FilterType::Lanczos3)
+    };
+    let mut jpeg = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg, LCD_JPEG_QUALITY).encode_image(&pixels)?;
+    Ok(jpeg)
+}
+
+async fn draw_lcd(output: &impl ImageOutput, image: Option<String>) -> Result<(), MirajazzError> {
     let image = match image {
         Some(image) => decode_image(&image)?,
         // CLE slots do not reliably blank this LCD on the calibrated firmware.
-        None => DynamicImage::ImageRgb8(RgbImage::new(format.size.0 as u32, format.size.1 as u32)),
+        None => DynamicImage::ImageRgb8(RgbImage::new(LCD_SIZE.0, LCD_SIZE.1)),
     };
     log::info!(
         "event=full_lcd_frame controller=Infobar position=0 input={}x{} output={}x{} mirajazz_index={} bat_wire_slot={}",
-        image.width(), image.height(), format.size.0, format.size.1,
+        image.width(), image.height(), LCD_SIZE.0, LCD_SIZE.1,
         LCD_IMAGE_INDEX, LCD_IMAGE_INDEX + 1
     );
-    output.draw(LCD_IMAGE_INDEX, format, image).await?;
+    output.write_jpeg(LCD_IMAGE_INDEX, &encode_lcd(image)?).await?;
     output.flush_images().await
 }
 
 async fn apply_image(output: &impl ImageOutput, kind: &Kind, evt: SetImageEvent) -> Result<(), MirajazzError> {
     match (evt.controller.as_deref(), evt.position) {
         (Some("Encoder"), Some(0) | None) => Ok(()),
-        (Some("Infobar"), Some(0)) => draw_lcd(output, kind, evt.image).await,
-        (Some("Infobar"), None) if evt.image.is_none() => draw_lcd(output, kind, None).await,
+        (Some("Infobar"), Some(0)) => draw_lcd(output, evt.image).await,
+        (Some("Infobar"), None) if evt.image.is_none() => draw_lcd(output, None).await,
         (Some("Keypad") | None, Some(position)) if (position as usize) < INPUT_KEY_COUNT => {
             if position as usize >= KEY_COUNT {
                 return Ok(()); // Touch points have no display, even though their indices overlap BAT slots.
@@ -341,7 +370,7 @@ async fn apply_image(output: &impl ImageOutput, kind: &Kind, evt: SetImageEvent)
         }
         (Some("Keypad") | None, None) if evt.image.is_none() => {
             output.clear_keys().await?;
-            draw_lcd(output, kind, None).await
+            draw_lcd(output, None).await
         }
         _ => Err(MirajazzError::BadData),
     }
@@ -368,15 +397,25 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct RecordingOutput(RefCell<Vec<WriteOperation>>);
+    struct RecordingOutput(RefCell<Vec<WriteOperation>>, RefCell<Option<RgbImage>>);
+
+    impl RecordingOutput {
+        fn record(&self, index: u8, jpeg: &[u8]) -> Result<(), MirajazzError> {
+            let jpeg = load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)?.to_rgb8();
+            self.0.borrow_mut().push(WriteOperation::Draw(index, jpeg.width(), jpeg.height(), jpeg.get_pixel(0, 0).0));
+            *self.1.borrow_mut() = Some(jpeg);
+            Ok(())
+        }
+    }
 
     impl ImageOutput for RecordingOutput {
         async fn draw(&self, index: u8, format: ImageFormat, image: DynamicImage) -> Result<(), MirajazzError> {
             // Exercise the same JPEG conversion as Device::set_button_image.
-            let bytes = convert_image_with_format(format, image).await?;
-            let jpeg = load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)?.to_rgb8();
-            self.0.borrow_mut().push(WriteOperation::Draw(index, jpeg.width(), jpeg.height(), jpeg.get_pixel(0, 0).0));
-            Ok(())
+            self.record(index, &convert_image_with_format(format, image).await?)
+        }
+
+        async fn write_jpeg(&self, index: u8, jpeg: &[u8]) -> Result<(), MirajazzError> {
+            self.record(index, jpeg)
         }
 
         async fn clear_key(&self, index: u8) -> Result<(), MirajazzError> {
@@ -407,6 +446,28 @@ mod tests {
             write!(&mut url, "%{byte:02X}").unwrap();
         }
         url
+    }
+
+    #[tokio::test]
+    async fn native_png_frame_keeps_single_pixel_detail_and_flattens_alpha_to_black() {
+        let mut frame = image::RgbaImage::from_pixel(LCD_SIZE.0, LCD_SIZE.1, image::Rgba([0, 0, 0, 255]));
+        for y in 0..LCD_SIZE.1 {
+            frame.put_pixel(200, y, image::Rgba([255, 255, 255, 255]));
+            frame.put_pixel(300, y, image::Rgba([255, 255, 255, 0]));
+        }
+        let mut png = Cursor::new(Vec::new());
+        frame.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let url = format!("data:image/png,{}", png.into_inner().iter().map(|byte| format!("%{byte:02X}")).collect::<String>());
+
+        let output = RecordingOutput::default();
+        apply_image(&output, &Kind::N1, event(Some("Infobar"), Some(0), Some(url))).await.unwrap();
+
+        let lcd = output.1.borrow().clone().unwrap();
+        assert_eq!(lcd.dimensions(), LCD_SIZE);
+        let luma = |x: u32| lcd.get_pixel(x, 42).0.iter().map(|&c| c as u32).sum::<u32>() / 3;
+        assert!(luma(200) > 230, "1px line lost intensity: {}", luma(200));
+        assert!(luma(198) < 25 && luma(202) < 25, "1px line smeared: {} {}", luma(198), luma(202));
+        assert!(luma(300) < 25, "transparent pixel not flattened to black: {}", luma(300));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

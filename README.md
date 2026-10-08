@@ -31,12 +31,18 @@ not prove the same LCD dimensions on the other USB variants or firmware revision
 Drag the **Full LCD** action into the native Infobar between the two touch points. Its default
 450×85 SVG has an edge border and colored corner markers. Use OpenDeck's normal state-image
 picker to replace it with your image; no title is overlaid. OpenDeck renders the state image
-through its standard pipeline, and this driver resizes the resulting JPEG to the calibrated
-canvas. There are no three-tile aliases or encoder display slots. Images and clears for
+through its standard pipeline. This driver accepts that frame as PNG or JPEG, composites any
+transparency over black, and encodes the LCD JPEG itself once (quality 95, 4:4:4 chroma).
+Native 450×85 frames are not resampled; other sizes are resized with Lanczos3. There are no
+three-tile aliases or encoder display slots. Images and clears for
 Keypad 15/16 or Encoder 0 are ignored, so input actions cannot overwrite the LCD.
 Clearing Infobar 0 writes and flushes a black 450×85 JPEG rather than a CLE slot command.
 
-**Display-quality limitation:** OpenDeck 2.14.0 rasterizes the Infobar at 248×58 and this driver enlarges that JPEG to 450×85. The actual HID upload was captured and decoded at 450×85, but enlarging cannot recover text detail lost in the frontend. A native-resolution vector render sent directly is sharper; automatic native-resolution rendering requires fixing the OpenDeck canvas resolution, not claiming a JPEG resize solves it. No such core rendering fix is included in this fork.
+**Display-quality requirement:** stock OpenDeck 2.14.0 rasterizes the Infobar at 248×58 and
+exports it as a lossy JPEG, so text detail is already lost before this driver enlarges it. Sharp
+automatic output needs an OpenDeck build that renders `n1-` Infobars at 450×85 and exports them
+as PNG (a two-file frontend change in `DeviceView.svelte` and `rendererHelper.ts`). That OpenDeck
+change is not part of this plugin.
 
 ## Breaking profile migration (0.3.0)
 
@@ -56,8 +62,8 @@ migrated and encoder/touch-point images no longer provide strip tiles.
 - Key LCD resolution is 108×104, displayed upright (no rotation/mirroring).
 - Mode 3 initialization, the two-second keep-alive, and full reconnect after host suspend
   retain the upstream behavior.
-- Malformed image data URLs, non-JPEG MIME types, and out-of-range controller positions are
-  rejected before a device draw; invalid image requests remain non-fatal.
+- Malformed image data URLs, MIME types other than JPEG/PNG, and out-of-range controller
+  positions are rejected before a device draw; invalid image requests remain non-fatal.
 
 ## Platform support
 
@@ -93,7 +99,8 @@ just package
 
 ### Regression checks and hardware probes
 
-`cargo test` covers the actual image consumer (including JPEG conversion and black LCD clear),
+`cargo test` covers the actual image consumer (including JPEG conversion, black LCD clear, and
+single-pixel detail plus alpha flattening for native PNG LCD frames),
 controller collision protection, bounds/data-URL rejection, auxiliary press/release states,
 and knob index 0. `cargo check --examples` checks the direct-device probe examples.
 The `strip_probe` example now draws one calibrated full-LCD frame on `0b00:1004`, not three
@@ -103,10 +110,10 @@ segments. Hardware probes require closing OpenDeck first; they are not automated
 
 On Linux with OpenDeck 2.14.0 and MSD NEO firmware `V3.MSD-NEO.02.011`:
 
-- Eight Rust regression tests passed; all hardware examples compiled and the release binary built.
+- Nine Rust regression tests passed; all hardware examples compiled and the release binary built.
 - The installed fork connected to `0b00:1004` and registered one encoder, two touch points, and one Infobar.
 - The live editor showed one LCD action between the auxiliary controls, rather than three encoder-image tiles.
-- Real OpenDeck image callbacks produced a `450x85` JPEG at BAT wire slot `16`; incoming frontend frames were `248x58` before driver resizing.
+- Real OpenDeck image callbacks produced a `450x85` JPEG at BAT wire slot `16`; stock OpenDeck frontend frames were `248x58` before driver resizing. With the patched OpenDeck build, incoming frames were `450x85` (no resampling).
 - The accompanying Muxboard native profile was migrated to this layout; its typecheck, 270 tests, and native build passed.
 
 The earlier direct-device ruler images were physically confirmed by the user. The live integration evidence above comes from the editor and driver logs, not framebuffer readback; no LCD screenshot/readback command is known.
