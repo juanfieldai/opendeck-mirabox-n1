@@ -28,7 +28,7 @@ image index 15 (BAT wire slot 16). This canvas was physically calibrated by the 
 MSD NEO firmware above; it is **not manufacturer-confirmed native pixel resolution** and does
 not prove the same LCD dimensions on the other USB variants or firmware revisions.
 
-Drag the **Full LCD** action into the native Infobar between the two touch points. Its default
+Drag the **Full LCD** action into the native Infobar (the strip below A, B and the knob). Its default
 450×85 SVG has an edge border and colored corner markers. Use OpenDeck's normal state-image
 picker to replace it with your image; no title is overlaid. OpenDeck renders the state image
 through its standard pipeline. This driver accepts that frame as PNG or JPEG, composites any
@@ -38,11 +38,18 @@ three-tile aliases or encoder display slots. Images and clears for
 Keypad 15/16 or Encoder 0 are ignored, so input actions cannot overwrite the LCD.
 Clearing Infobar 0 writes and flushes a black 450×85 JPEG rather than a CLE slot command.
 
-**Display-quality requirement:** stock OpenDeck 2.14.0 rasterizes the Infobar at 248×58 and
-keys at 144×144, and exports both as lossy JPEG, so text detail is already lost before this
-driver resizes them. Sharp automatic output needs an OpenDeck build that renders `n1-` Infobars
-at 450×85 and keys at 105×100 and exports them as PNG (a frontend change in `DeviceView.svelte`
-and `rendererHelper.ts`). That OpenDeck change is not part of this plugin.
+## Layout and display geometry
+
+The plugin declares the N1's physical layout and display sizes in `registerDevice` through an
+optional `layout` field: A, B and the knob on the top row, the LCD strip below them, then the
+5×3 keypad; keys rendered at 105×100 and the strip at 450×85; frames delivered as lossless PNG.
+All N1-specific knowledge lives in this plugin.
+
+OpenDeck itself decides the editor arrangement and the size at which it rasterizes images, so
+honoring the declaration needs an OpenDeck build with generic `layout` support. Stock OpenDeck
+2.14.0 ignores the field: the editor keeps its default arrangement (keypad, then knob, then
+A/strip/B), keys arrive as 144×144 JPEG (downscaled here with Lanczos3) and the strip as a
+248×58 JPEG, which enlarging to 450×85 cannot make sharp.
 
 ## Breaking profile migration (0.3.0)
 
@@ -106,7 +113,8 @@ just package
 `cargo test` covers the actual image consumer (including JPEG conversion, black LCD clear, and
 single-pixel detail plus alpha flattening for native PNG LCD and key frames),
 controller collision protection, bounds/data-URL rejection, auxiliary press/release states,
-and knob index 0. `cargo check --examples` checks the direct-device probe examples.
+knob index 0, and that the declared editor layout places every control exactly once.
+`cargo check --examples` checks the direct-device probe examples.
 The `strip_probe` example now draws one calibrated full-LCD frame on `0b00:1004`, not three
 segments. Hardware probes require closing OpenDeck first; they are not automated tests.
 
@@ -114,7 +122,7 @@ segments. Hardware probes require closing OpenDeck first; they are not automated
 
 On Linux with OpenDeck 2.14.0 and MSD NEO firmware `V3.MSD-NEO.02.011`:
 
-- Nine Rust regression tests passed; all hardware examples compiled and the release binary built.
+- Ten Rust regression tests passed; all hardware examples compiled and the release binary built.
 - The installed fork connected to `0b00:1004` and registered one encoder, two touch points, and one Infobar.
 - The live editor showed one LCD action between the auxiliary controls, rather than three encoder-image tiles.
 - Real OpenDeck image callbacks produced a `450x85` JPEG at BAT wire slot `16`; stock OpenDeck frontend frames were `248x58` before driver resizing. With the patched OpenDeck build, incoming frames were `450x85` (no resampling).

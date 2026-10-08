@@ -9,6 +9,9 @@ All notable changes to this project will be documented in this file.
   resampling for native-size input.
 - Key images are now 105×100, calibrated on the MSD NEO (`0b00:1004`) with edge-marker
   patterns: 105×100 fills the key exactly, so the previous 108×104 exceeded the visible area.
+- Declare the N1's physical layout (A, B and knob on top, LCD strip below, then the keypad),
+  key/strip pixel sizes and lossless frame delivery through an optional `layout` field in
+  `registerDevice`. OpenDeck builds without `layout` support ignore it.
 
 ## [0.3.0] - 2026-10-08
 

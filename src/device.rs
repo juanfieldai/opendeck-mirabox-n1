@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     DEVICES, TOKENS,
-    mappings::{COL_COUNT, CandidateDevice, ENCODER_COUNT, INFOBAR_COUNT, INPUT_KEY_COUNT, KEY_COUNT, KEY_SIZE, LCD_IMAGE_INDEX, LCD_SIZE, ROW_COUNT, TOUCHPOINT_COUNT},
+    mappings::{COL_COUNT, CandidateDevice, ENCODER_COUNT, INFOBAR_COUNT, INPUT_KEY_COUNT, KEY_COUNT, KEY_SIZE, LCD_IMAGE_INDEX, LCD_SIZE, ROW_COUNT, TOUCHPOINT_COUNT, editor_layout},
 };
 
 /// Hardware JPEG for keys and the full LCD: 4:4:4 (image crate default), q95 accepted on hardware.
@@ -89,7 +89,8 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
                         "encoders": ENCODER_COUNT,
                         "touchpoints": TOUCHPOINT_COUNT,
                         "infobars": INFOBAR_COUNT,
-                        "type": 0
+                        "type": 0,
+                        "layout": editor_layout()
                     }
                 }))
                 .await

@@ -20,6 +20,24 @@ pub const LCD_SIZE: (u32, u32) = (450, 85);
 /// exactly at 105x100, upright, no mirror. Upstream used 108x104 for `6603:1000`; Mirabox's SDK says 96x96.
 pub const KEY_SIZE: (u32, u32) = (105, 100);
 
+/// Physical arrangement for OpenDeck's editor: A, B and the knob on top, the LCD strip below
+/// them, then the 5x3 keypad. OpenDeck builds without `layout` support ignore this field and
+/// show their default arrangement; frames then arrive at OpenDeck's default sizes as JPEG.
+pub fn editor_layout() -> serde_json::Value {
+    let cell = |controller: &str, position: usize| serde_json::json!({ "controller": controller, "position": position });
+    let mut rows = vec![
+        vec![cell("Keypad", KEY_COUNT), cell("Keypad", KEY_COUNT + 1), cell("Encoder", 0)],
+        vec![cell("Infobar", 0)],
+    ];
+    rows.extend((0..ROW_COUNT).map(|row| (0..COL_COUNT).map(|col| cell("Keypad", row * COL_COUNT + col)).collect()));
+    serde_json::json!({
+        "rows": rows,
+        "keySize": [KEY_SIZE.0, KEY_SIZE.1],
+        "infobarSize": [LCD_SIZE.0, LCD_SIZE.1],
+        "lossless": true,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub enum Kind {
     N1,
@@ -100,4 +118,29 @@ pub struct CandidateDevice {
     pub id: String,
     pub dev: HidDeviceInfo,
     pub kind: Kind,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// OpenDeck discards a layout that misses or repeats any registered control.
+    #[test]
+    fn editor_layout_places_every_registered_control_exactly_once() {
+        let layout = editor_layout();
+        let mut placed: Vec<(String, u64)> = layout["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| row.as_array().unwrap().iter())
+            .map(|cell| (cell["controller"].as_str().unwrap().to_owned(), cell["position"].as_u64().unwrap()))
+            .collect();
+        placed.sort();
+        let mut registered: Vec<(String, u64)> = [("Keypad", INPUT_KEY_COUNT), ("Encoder", ENCODER_COUNT), ("Infobar", INFOBAR_COUNT)]
+            .into_iter()
+            .flat_map(|(controller, count)| (0..count as u64).map(move |position| (controller.to_owned(), position)))
+            .collect();
+        registered.sort();
+        assert_eq!(placed, registered);
+    }
 }
