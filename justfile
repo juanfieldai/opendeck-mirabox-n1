@@ -1,4 +1,4 @@
-id := "com.github.pomeo.opendeck-mirabox-n1.sdPlugin"
+id := "com.github.juanfieldai.opendeck-mirabox-n1.sdPlugin"
 
 # Docker command used for the macOS cross-build. Override if docker needs sudo:
 #   just docker="sudo docker" package

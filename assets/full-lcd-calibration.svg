@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="450" height="85" viewBox="0 0 450 85">
+  <rect width="450" height="85" fill="#111827"/>
+  <path d="M1 1H449V84H1Z" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <path d="M150 2V83M300 2V83M2 42.5H448" stroke="#475569" stroke-width="1"/>
+  <rect x="4" y="4" width="18" height="18" fill="#ef4444"/>
+  <rect x="428" y="4" width="18" height="18" fill="#22c55e"/>
+  <rect x="4" y="63" width="18" height="18" fill="#3b82f6"/>
+  <rect x="428" y="63" width="18" height="18" fill="#facc15"/>
+  <text x="225" y="35" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="bold" fill="#ffffff">FULL LCD</text>
+  <text x="225" y="63" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#cbd5e1">450 × 85 calibrated canvas</text>
+</svg>

@@ -1,9 +1,9 @@
 {
-  "Name": "Mirabox N1",
-  "Description": "Device support plugin for Mirabox N1",
-  "Author": "Sergey Ovechkin",
-  "Version": "0.2.1",
-  "PluginUUID": "com.github.pomeo.opendeck-mirabox-n1",
+  "Name": "Mirabox N1 Full LCD",
+  "Description": "Unofficial Mirabox N1 / MSD NEO full-LCD device support fork",
+  "Author": "Juan Field AI; based on Sergey Ovechkin's Mirabox N1 plugin",
+  "Version": "0.3.0",
+  "PluginUUID": "com.github.juanfieldai.opendeck-mirabox-n1",
   "CodePathLin": "opendeck-mirabox-n1-linux",
   "CodePathMac": "opendeck-mirabox-n1-mac",
   "CodePathWin": "opendeck-mirabox-n1-win.exe",
@@ -14,6 +14,17 @@
     { "Platform": "mac", "MinimumVersion": "11.3" },
     { "Platform": "windows", "MinimumVersion": "10" }
   ],
-  "Actions": [],
+  "Actions": [
+    {
+      "UUID": "com.github.juanfieldai.opendeck-mirabox-n1.full-lcd",
+      "Name": "Full LCD",
+      "Tooltip": "Display a full-LCD image; replace the calibration image with the standard image picker.",
+      "Icon": "assets/icon",
+      "Controllers": ["Infobar"],
+      "States": [
+        { "Image": "assets/full-lcd-calibration", "ShowTitle": false }
+      ]
+    }
+  ],
   "DeviceNamespace": "n1"
 }
