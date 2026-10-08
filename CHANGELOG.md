@@ -12,6 +12,10 @@ All notable changes to this project will be documented in this file.
 - Declare the N1's physical layout (A, B and knob on top, LCD strip below, then the keypad),
   key/strip pixel sizes and lossless frame delivery through an optional `layout` field in
   `registerDevice`. OpenDeck builds without `layout` support ignore it.
+- Let plugins draw the full LCD directly at native 450×85 through a user-only Unix socket
+  (`$XDG_RUNTIME_DIR/opendeck-mirabox-n1/strip.sock`; SVG, PNG or JPEG data URLs), sharp on
+  stock OpenDeck. The drawing connection owns the strip; OpenDeck's Infobar frames return when
+  it releases or disconnects.
 
 ## [0.3.0] - 2026-10-08
 

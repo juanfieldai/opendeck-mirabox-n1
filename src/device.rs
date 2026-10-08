@@ -2,7 +2,12 @@ use data_url::DataUrl;
 use image::{DynamicImage, RgbImage, codecs::jpeg::JpegEncoder, imageops::FilterType, load_from_memory_with_format};
 use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate};
 use openaction::{OUTBOUND_EVENT_MANAGER, SetImageEvent};
-use std::time::{Duration, SystemTime};
+use std::{
+    collections::HashMap,
+    sync::LazyLock,
+    time::{Duration, SystemTime},
+};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -96,6 +101,7 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
                 .await
                 .unwrap();
         }
+        restore_direct_lcd(&candidate.id).await;
 
         // After a resume the N1 firmware is back in its default mode and won't deliver input over
         // the existing handle, so we tear everything down and reconnect from scratch — an in-place
@@ -278,7 +284,7 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
 
 /// Device writes are kept behind this narrow interface so tests exercise the image consumer
 /// without opening a HID handle.
-trait ImageOutput {
+pub(crate) trait ImageOutput {
     async fn write_jpeg(&self, index: u8, jpeg: &[u8]) -> Result<(), MirajazzError>;
     async fn clear_key(&self, index: u8) -> Result<(), MirajazzError>;
     async fn clear_keys(&self) -> Result<(), MirajazzError>;
@@ -304,7 +310,7 @@ impl ImageOutput for Device {
 }
 
 /// Accepts JPEG and lossless PNG frames; each display is encoded only once, by `encode_jpeg`.
-fn decode_image(image: &str) -> Result<DynamicImage, MirajazzError> {
+pub(crate) fn decode_image(image: &str) -> Result<DynamicImage, MirajazzError> {
     let url = DataUrl::process(image).map_err(|_| MirajazzError::BadData)?;
     let format = match (url.mime_type().type_.as_str(), url.mime_type().subtype.as_str()) {
         ("image", "jpeg") => image::ImageFormat::Jpeg,
@@ -317,7 +323,7 @@ fn decode_image(image: &str) -> Result<DynamicImage, MirajazzError> {
 
 /// Composites over black (as a canvas JPEG export does), resamples only off-size input,
 /// and avoids mirajazz's nearest-neighbour resize and q90 encode.
-fn encode_jpeg(image: DynamicImage, size: (u32, u32)) -> Result<Vec<u8>, MirajazzError> {
+pub(crate) fn encode_jpeg(image: DynamicImage, size: (u32, u32)) -> Result<Vec<u8>, MirajazzError> {
     let mut pixels = RgbImage::new(image.width(), image.height());
     for (target, source) in pixels.pixels_mut().zip(image.to_rgba8().pixels()) {
         let [r, g, b, a] = source.0;
@@ -333,7 +339,22 @@ fn encode_jpeg(image: DynamicImage, size: (u32, u32)) -> Result<Vec<u8>, Mirajaz
     Ok(jpeg)
 }
 
-async fn draw_lcd(output: &impl ImageOutput, image: Option<String>) -> Result<(), MirajazzError> {
+/// Who is shown on a device's full LCD. A direct-drawing client (see `strip`) owns it until it
+/// releases; OpenDeck's Infobar frames are kept meanwhile and shown again afterwards.
+#[derive(Default)]
+pub struct LcdState {
+    /// Connection id of the direct-drawing client, if any.
+    pub owner: Option<u64>,
+    /// JPEG the owner last drew, redrawn after the device reconnects.
+    pub direct: Option<Vec<u8>>,
+    /// Latest OpenDeck Infobar frame; `None` is a blank LCD.
+    pub opendeck: Option<String>,
+}
+
+/// Lock order: take `DEVICES` before `LCD_STATES`, as `set_image` already holds `DEVICES`.
+pub static LCD_STATES: LazyLock<Mutex<HashMap<String, LcdState>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) async fn draw_opendeck_frame(output: &impl ImageOutput, image: Option<String>) -> Result<(), MirajazzError> {
     let image = match image {
         Some(image) => decode_image(&image)?,
         // CLE slots do not reliably blank this LCD on the calibrated firmware.
@@ -344,15 +365,28 @@ async fn draw_lcd(output: &impl ImageOutput, image: Option<String>) -> Result<()
         image.width(), image.height(), LCD_SIZE.0, LCD_SIZE.1,
         LCD_IMAGE_INDEX, LCD_IMAGE_INDEX + 1
     );
-    output.write_jpeg(LCD_IMAGE_INDEX, &encode_jpeg(image, LCD_SIZE)?).await?;
+    write_lcd_jpeg(output, &encode_jpeg(image, LCD_SIZE)?).await
+}
+
+pub(crate) async fn write_lcd_jpeg(output: &impl ImageOutput, jpeg: &[u8]) -> Result<(), MirajazzError> {
+    output.write_jpeg(LCD_IMAGE_INDEX, jpeg).await?;
     output.flush_images().await
 }
 
-async fn apply_image(output: &impl ImageOutput, evt: SetImageEvent) -> Result<(), MirajazzError> {
+/// Records OpenDeck's latest LCD frame and shows it unless a direct client owns the LCD.
+async fn draw_lcd(output: &impl ImageOutput, lcd: &mut LcdState, image: Option<String>) -> Result<(), MirajazzError> {
+    lcd.opendeck = image.clone();
+    if lcd.owner.is_some() {
+        return Ok(());
+    }
+    draw_opendeck_frame(output, image).await
+}
+
+async fn apply_image(output: &impl ImageOutput, lcd: &mut LcdState, evt: SetImageEvent) -> Result<(), MirajazzError> {
     match (evt.controller.as_deref(), evt.position) {
         (Some("Encoder"), Some(0) | None) => Ok(()),
-        (Some("Infobar"), Some(0)) => draw_lcd(output, evt.image).await,
-        (Some("Infobar"), None) if evt.image.is_none() => draw_lcd(output, None).await,
+        (Some("Infobar"), Some(0)) => draw_lcd(output, lcd, evt.image).await,
+        (Some("Infobar"), None) if evt.image.is_none() => draw_lcd(output, lcd, None).await,
         (Some("Keypad") | None, Some(position)) if (position as usize) < INPUT_KEY_COUNT => {
             if position as usize >= KEY_COUNT {
                 return Ok(()); // Touch points have no display, even though their indices overlap BAT slots.
@@ -369,7 +403,7 @@ async fn apply_image(output: &impl ImageOutput, evt: SetImageEvent) -> Result<()
         }
         (Some("Keypad") | None, None) if evt.image.is_none() => {
             output.clear_keys().await?;
-            draw_lcd(output, None).await
+            draw_lcd(output, lcd, None).await
         }
         _ => Err(MirajazzError::BadData),
     }
@@ -377,7 +411,20 @@ async fn apply_image(output: &impl ImageOutput, evt: SetImageEvent) -> Result<()
 
 /// Only Infobar 0 owns the full LCD. Input-only controllers never draw into its BAT slot.
 pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(), MirajazzError> {
-    apply_image(device, evt).await
+    let mut states = LCD_STATES.lock().await;
+    let lcd = states.entry(evt.device.clone()).or_default();
+    apply_image(device, lcd, evt).await
+}
+
+/// Redraws a direct client's last frame after the device (re)connects; OpenDeck repaints its own.
+async fn restore_direct_lcd(id: &str) {
+    let devices = DEVICES.read().await;
+    let states = LCD_STATES.lock().await;
+    if let (Some(device), Some(jpeg)) = (devices.get(id), states.get(id).and_then(|lcd| lcd.direct.as_ref())) {
+        if let Err(err) = write_lcd_jpeg(device, jpeg).await {
+            log::error!("Failed to restore direct LCD frame on {id}: {err}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -430,6 +477,11 @@ mod tests {
         SetImageEvent { device: "n1-test".into(), controller: controller.map(str::to_owned), position, image }
     }
 
+    /// Applies an event with no direct client owning the LCD.
+    async fn apply(output: &RecordingOutput, evt: SetImageEvent) -> Result<(), MirajazzError> {
+        apply_image(output, &mut LcdState::default(), evt).await
+    }
+
     fn black_jpeg_url() -> String {
         let mut jpeg = Cursor::new(Vec::new());
         DynamicImage::ImageRgb8(RgbImage::new(12, 12)).write_to(&mut jpeg, image::ImageFormat::Jpeg).unwrap();
@@ -454,7 +506,7 @@ mod tests {
             let url = format!("data:image/png,{}", png.into_inner().iter().map(|byte| format!("%{byte:02X}")).collect::<String>());
 
             let output = RecordingOutput::default();
-            apply_image(&output, event(Some(controller), Some(position), Some(url))).await.unwrap();
+            apply(&output, event(Some(controller), Some(position), Some(url))).await.unwrap();
 
             let written = output.1.borrow().clone().unwrap();
             assert_eq!(written.dimensions(), size, "{controller}");
@@ -468,10 +520,10 @@ mod tests {
     #[tokio::test]
     async fn only_infobar_image_writes_full_lcd_without_input_controller_collisions() {
         let output = RecordingOutput::default();
-        apply_image(&output, event(Some("Infobar"), Some(0), Some(black_jpeg_url()))).await.unwrap();
+        apply(&output, event(Some("Infobar"), Some(0), Some(black_jpeg_url()))).await.unwrap();
         for (controller, position) in [("Keypad", 15), ("Keypad", 16), ("Encoder", 0)] {
             for image in [Some("not a data URL".into()), None] {
-                apply_image(&output, event(Some(controller), Some(position), image)).await.unwrap();
+                apply(&output, event(Some(controller), Some(position), image)).await.unwrap();
             }
         }
         assert_eq!(*output.0.borrow(), [WriteOperation::Draw(15, 450, 85, [0, 0, 0]), WriteOperation::Flush]);
@@ -480,33 +532,48 @@ mod tests {
     #[tokio::test]
     async fn infobar_clear_draws_and_flushes_black_jpeg_instead_of_cle() {
         let output = RecordingOutput::default();
-        apply_image(&output, event(Some("Infobar"), Some(0), None)).await.unwrap();
+        apply(&output, event(Some("Infobar"), Some(0), None)).await.unwrap();
         assert_eq!(*output.0.borrow(), [WriteOperation::Draw(15, 450, 85, [0, 0, 0]), WriteOperation::Flush]);
     }
 
     #[tokio::test]
     async fn whole_device_clear_also_blanks_full_lcd() {
         let output = RecordingOutput::default();
-        apply_image(&output, event(None, None, None)).await.unwrap();
+        apply(&output, event(None, None, None)).await.unwrap();
         assert_eq!(*output.0.borrow(), [WriteOperation::ClearAll, WriteOperation::Draw(15, 450, 85, [0, 0, 0]), WriteOperation::Flush]);
     }
 
     #[tokio::test]
     async fn keypad_images_keep_their_existing_geometry_and_clear_slot() {
         let output = RecordingOutput::default();
-        apply_image(&output, event(Some("Keypad"), Some(14), Some(black_jpeg_url()))).await.unwrap();
-        apply_image(&output, event(Some("Keypad"), Some(14), None)).await.unwrap();
+        apply(&output, event(Some("Keypad"), Some(14), Some(black_jpeg_url()))).await.unwrap();
+        apply(&output, event(Some("Keypad"), Some(14), None)).await.unwrap();
         assert_eq!(*output.0.borrow(), [WriteOperation::Draw(14, 105, 100, [0, 0, 0]), WriteOperation::Flush, WriteOperation::Clear(14), WriteOperation::Flush]);
+    }
+
+    #[tokio::test]
+    async fn directly_owned_lcd_hides_opendeck_frames_but_keeps_the_latest_and_keys_draw() {
+        let output = RecordingOutput::default();
+        let mut lcd = LcdState { owner: Some(7), ..Default::default() };
+        apply_image(&output, &mut lcd, event(Some("Infobar"), Some(0), Some(black_jpeg_url()))).await.unwrap();
+        apply_image(&output, &mut lcd, event(None, None, None)).await.unwrap();
+        apply_image(&output, &mut lcd, event(Some("Keypad"), Some(3), Some(black_jpeg_url()))).await.unwrap();
+        assert_eq!(*output.0.borrow(), [WriteOperation::ClearAll, WriteOperation::Draw(3, 105, 100, [0, 0, 0]), WriteOperation::Flush]);
+        assert_eq!(lcd.opendeck, None, "a whole-device clear is the latest OpenDeck LCD frame");
+
+        apply_image(&output, &mut lcd, event(Some("Infobar"), Some(0), Some(black_jpeg_url()))).await.unwrap();
+        assert_eq!(lcd.opendeck, Some(black_jpeg_url()));
+        assert_eq!(output.0.borrow().len(), 3, "owned LCD must not be drawn");
     }
 
     #[tokio::test]
     async fn invalid_positions_and_malformed_images_fail_without_drawing() {
         let output = RecordingOutput::default();
         for (controller, position) in [("Infobar", Some(1)), ("Infobar", None), ("Keypad", Some(17)), ("Encoder", Some(1)), ("Unknown", Some(0))] {
-            assert!(matches!(apply_image(&output, event(Some(controller), position, Some(black_jpeg_url()))).await, Err(MirajazzError::BadData)));
+            assert!(matches!(apply(&output, event(Some(controller), position, Some(black_jpeg_url()))).await, Err(MirajazzError::BadData)));
         }
         for image in ["not a data URL", "data:image/jpeg;base64,%%%", "data:text/jpeg,test"] {
-            assert!(matches!(apply_image(&output, event(Some("Infobar"), Some(0), Some(image.into()))).await, Err(MirajazzError::BadData)));
+            assert!(matches!(apply(&output, event(Some("Infobar"), Some(0), Some(image.into()))).await, Err(MirajazzError::BadData)));
         }
         assert!(output.0.borrow().is_empty());
     }

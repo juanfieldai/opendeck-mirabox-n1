@@ -12,6 +12,8 @@ use tokio::signal::unix::{SignalKind, signal};
 mod device;
 mod inputs;
 mod mappings;
+#[cfg(unix)]
+mod strip;
 mod watcher;
 
 pub static DEVICES: LazyLock<RwLock<HashMap<String, Device>>> =
@@ -35,6 +37,13 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
             .write()
             .await
             .insert("_watcher_task".to_string(), token);
+
+        #[cfg(unix)]
+        {
+            let token = CancellationToken::new();
+            tracker.spawn(strip::serve(token.clone()));
+            TOKENS.write().await.insert("_strip_task".to_string(), token);
+        }
 
         log::info!("Plugin initialized");
 

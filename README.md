@@ -38,18 +38,44 @@ three-tile aliases or encoder display slots. Images and clears for
 Keypad 15/16 or Encoder 0 are ignored, so input actions cannot overwrite the LCD.
 Clearing Infobar 0 writes and flushes a black 450×85 JPEG rather than a CLE slot command.
 
+## Drawing the strip directly (sharp on stock OpenDeck)
+
+OpenDeck rasterizes the Infobar itself at 248×58 before this driver receives it, and enlarging
+that to 450×85 cannot make it sharp. Plugins can therefore draw the strip **directly** through
+this driver, which renders the image at the native 450×85 and sends it straight to the device.
+This works with unmodified OpenDeck.
+
+The driver listens on a Unix socket (Linux/macOS) at
+`$XDG_RUNTIME_DIR/opendeck-mirabox-n1/strip.sock`, in a directory only your user can open.
+Requests are newline-delimited JSON; each gets one reply line, `{"ok":true}` or
+`{"ok":false,"error":"…"}`:
+
+```json
+{"event":"drawStrip","device":"n1-<serial>","image":"data:image/svg+xml;base64,…"}
+{"event":"releaseStrip","device":"n1-<serial>"}
+```
+
+- `image` is an SVG, PNG or JPEG data URL. SVG is rendered to fill 450×85 (system fonts are
+  available); bitmaps of another size are resampled with Lanczos3.
+- The connection that draws first owns that device's strip; `drawStrip` from another
+  connection is rejected until the owner releases it or disconnects.
+- While a client owns the strip, OpenDeck's Infobar frames are kept but not shown. Releasing or
+  disconnecting shows OpenDeck's latest Infobar frame again, so plugins that only use
+  `setImage` keep working and remain the fallback.
+- The owner's last frame is redrawn when the device reconnects (unplug or resume).
+- `device` is the OpenDeck device ID the plugin sees in `willAppear`.
+
+Clients should keep sending the same image through OpenDeck's `setImage` for the editor
+preview and as the fallback. [Muxboard](https://github.com/juanfieldai/muxboard) is a client.
+
 ## Layout and display geometry
 
-The plugin declares the N1's physical layout and display sizes in `registerDevice` through an
-optional `layout` field: A, B and the knob on the top row, the LCD strip below them, then the
-5×3 keypad; keys rendered at 105×100 and the strip at 450×85; frames delivered as lossless PNG.
-All N1-specific knowledge lives in this plugin.
-
-OpenDeck itself decides the editor arrangement and the size at which it rasterizes images, so
-honoring the declaration needs an OpenDeck build with generic `layout` support. Stock OpenDeck
-2.14.0 ignores the field: the editor keeps its default arrangement (keypad, then knob, then
-A/strip/B), keys arrive as 144×144 JPEG (downscaled here with Lanczos3) and the strip as a
-248×58 JPEG, which enlarging to 450×85 cannot make sharp.
+The plugin also declares the N1's physical layout and display sizes in `registerDevice`
+through an optional `layout` field: A, B and the knob on the top row, the LCD strip below them,
+then the 5×3 keypad, with keys at 105×100, the strip at 450×85 and lossless PNG frames.
+Stock OpenDeck 2.14.0 ignores the field: the editor keeps its default arrangement (keypad, then
+knob, then A/strip/B) and keys arrive as 144×144 JPEG, which this driver downscales to 105×100
+with Lanczos3. Only an OpenDeck build with generic `layout` support applies it.
 
 ## Breaking profile migration (0.3.0)
 
@@ -113,7 +139,9 @@ just package
 `cargo test` covers the actual image consumer (including JPEG conversion, black LCD clear, and
 single-pixel detail plus alpha flattening for native PNG LCD and key frames),
 controller collision protection, bounds/data-URL rejection, auxiliary press/release states,
-knob index 0, and that the declared editor layout places every control exactly once.
+knob index 0, that the declared editor layout places every control exactly once, native SVG
+strip rendering, strip-socket replies and failures, and that a directly owned strip hides
+OpenDeck's LCD frames while keeping the latest one.
 `cargo check --examples` checks the direct-device probe examples.
 The `strip_probe` example now draws one calibrated full-LCD frame on `0b00:1004`, not three
 segments. Hardware probes require closing OpenDeck first; they are not automated tests.
@@ -122,11 +150,12 @@ segments. Hardware probes require closing OpenDeck first; they are not automated
 
 On Linux with OpenDeck 2.14.0 and MSD NEO firmware `V3.MSD-NEO.02.011`:
 
-- Ten Rust regression tests passed; all hardware examples compiled and the release binary built.
+- Thirteen Rust regression tests passed; all hardware examples compiled and the release binary built.
 - The installed fork connected to `0b00:1004` and registered one encoder, two touch points, and one Infobar.
 - The live editor showed one LCD action between the auxiliary controls, rather than three encoder-image tiles.
-- Real OpenDeck image callbacks produced a `450x85` JPEG at BAT wire slot `16`; stock OpenDeck frontend frames were `248x58` before driver resizing. With the patched OpenDeck build, incoming frames were `450x85` (no resampling).
-- The accompanying Muxboard native profile was migrated to this layout; its typecheck, 270 tests, and native build passed.
+- Real OpenDeck image callbacks produced a `450x85` JPEG at BAT wire slot `16`; stock OpenDeck frontend frames were `248x58` before driver resizing.
+- On stock OpenDeck 2.14.0, Muxboard drew the strip through the socket (`direct_strip_frame … output=450x85`); a second client's `drawStrip` was rejected as owned, and stopping Muxboard released the strip and redrew OpenDeck's retained `248x58` Infobar frame.
+- The accompanying Muxboard native profile was migrated to this layout; its typecheck, tests, and native build passed.
 
 The earlier direct-device ruler images were physically confirmed by the user. The live integration evidence above comes from the editor and driver logs, not framebuffer readback; no LCD screenshot/readback command is known.
 
