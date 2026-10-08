@@ -1,7 +1,4 @@
-use mirajazz::{
-    device::DeviceQuery,
-    types::{HidDeviceInfo, ImageFormat, ImageMirroring, ImageMode, ImageRotation},
-};
+use mirajazz::{device::DeviceQuery, types::HidDeviceInfo};
 
 // Must be unique between all the plugins, 2 characters long and match `DeviceNamespace` field in `manifest.json`
 pub const DEVICE_NAMESPACE: &str = "n1";
@@ -19,6 +16,8 @@ pub const INFOBAR_COUNT: usize = 1;
 /// Mirajazz index 15 becomes BAT wire slot 16; it is not an encoder display.
 pub const LCD_IMAGE_INDEX: u8 = 15;
 pub const LCD_SIZE: (u32, u32) = (450, 85);
+/// Determined on hardware: N1 key LCDs are 108x104 (landscape), upright, no mirror.
+pub const KEY_SIZE: (u32, u32) = (108, 104);
 
 #[derive(Debug, Clone)]
 pub enum Kind {
@@ -91,16 +90,6 @@ impl Kind {
     pub fn mode(&self) -> Option<u8> {
         match self {
             Self::N1 => Some(3),
-        }
-    }
-
-    pub fn image_format(&self) -> ImageFormat {
-        // Determined on hardware: N1 key LCDs are 108x104 (landscape), upright, no mirror.
-        ImageFormat {
-            mode: ImageMode::JPEG,
-            size: (108, 104),
-            rotation: ImageRotation::Rot0,
-            mirror: ImageMirroring::None,
         }
     }
 }

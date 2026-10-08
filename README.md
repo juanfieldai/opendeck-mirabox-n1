@@ -39,10 +39,10 @@ Keypad 15/16 or Encoder 0 are ignored, so input actions cannot overwrite the LCD
 Clearing Infobar 0 writes and flushes a black 450×85 JPEG rather than a CLE slot command.
 
 **Display-quality requirement:** stock OpenDeck 2.14.0 rasterizes the Infobar at 248×58 and
-exports it as a lossy JPEG, so text detail is already lost before this driver enlarges it. Sharp
-automatic output needs an OpenDeck build that renders `n1-` Infobars at 450×85 and exports them
-as PNG (a two-file frontend change in `DeviceView.svelte` and `rendererHelper.ts`). That OpenDeck
-change is not part of this plugin.
+keys at 144×144, and exports both as lossy JPEG, so text detail is already lost before this
+driver resizes them. Sharp automatic output needs an OpenDeck build that renders `n1-` Infobars
+at 450×85 and keys at 108×104 and exports them as PNG (a frontend change in `DeviceView.svelte`
+and `rendererHelper.ts`). That OpenDeck change is not part of this plugin.
 
 ## Breaking profile migration (0.3.0)
 
@@ -59,7 +59,8 @@ migrated and encoder/touch-point images no longer provide strip tiles.
 - The device boots into its built-in numpad layer. The plugin sends a mode-switch command on
   connect to put it into the "PC / stream-dock" mode where host images are displayed, and a
   periodic keep-alive so it doesn't drop off the USB bus.
-- Key LCD resolution is 108×104, displayed upright (no rotation/mirroring).
+- Key LCD resolution is 108×104, displayed upright (no rotation/mirroring). Key images use the
+  same single JPEG encode as the full LCD (native frames are not resampled; others use Lanczos3).
 - Mode 3 initialization, the two-second keep-alive, and full reconnect after host suspend
   retain the upstream behavior.
 - Malformed image data URLs, MIME types other than JPEG/PNG, and out-of-range controller
@@ -100,7 +101,7 @@ just package
 ### Regression checks and hardware probes
 
 `cargo test` covers the actual image consumer (including JPEG conversion, black LCD clear, and
-single-pixel detail plus alpha flattening for native PNG LCD frames),
+single-pixel detail plus alpha flattening for native PNG LCD and key frames),
 controller collision protection, bounds/data-URL rejection, auxiliary press/release states,
 and knob index 0. `cargo check --examples` checks the direct-device probe examples.
 The `strip_probe` example now draws one calibrated full-LCD frame on `0b00:1004`, not three
