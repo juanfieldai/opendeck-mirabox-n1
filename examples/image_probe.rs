@@ -17,7 +17,7 @@ use mirajazz::{
 
 const QUERY: DeviceQuery = DeviceQuery::new(65440, 1, 0x6603, 0x1000);
 const KEY_COUNT: usize = 15;
-const ENCODER_COUNT: usize = 3;
+const ENCODER_COUNT: usize = 1;
 
 static MODE_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -53,7 +53,7 @@ async fn session(w: u32, h: u32) -> Result<(), MirajazzError> {
     };
 
     eprintln!("[session] connecting serial={:?}", dev.serial_number);
-    let device = Device::connect(&dev, 3, KEY_COUNT, ENCODER_COUNT).await?;
+    let device = Device::connect(&dev, 3, KEY_COUNT + 2, ENCODER_COUNT).await?;
     // Initialize FIRST (this sends DIS+LIG), THEN switch mode, so the init doesn't undo set_mode.
     eprintln!("set_brightness(init) -> {:?}", device.set_brightness(100).await);
 

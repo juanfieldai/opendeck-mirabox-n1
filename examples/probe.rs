@@ -18,8 +18,8 @@ use mirajazz::{
 
 const QUERY: DeviceQuery = DeviceQuery::new(65440, 1, 0x6603, 0x1000);
 
-// Tentative geometry for the N1; only affects buffer sizing, not raw input logging.
-const KEY_COUNT: usize = 15;
+// Input state includes the 15 LCD keys and two screenless auxiliary buttons.
+const INPUT_KEY_COUNT: usize = 17;
 const ENCODER_COUNT: usize = 1;
 
 fn log_input(input: u8, state: u8) -> Result<DeviceInput, MirajazzError> {
@@ -41,7 +41,7 @@ async fn session() -> Result<(), MirajazzError> {
         dev.vendor_id, dev.product_id, dev.serial_number
     );
 
-    let device = Device::connect(&dev, 3, KEY_COUNT, ENCODER_COUNT).await?;
+    let device = Device::connect(&dev, 3, INPUT_KEY_COUNT, ENCODER_COUNT).await?;
     device.set_brightness(50).await.ok();
     device.clear_all_button_images().await.ok();
     device.flush().await.ok();
