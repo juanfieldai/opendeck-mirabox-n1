@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "opendeck-mirabox-n1"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "data-url",
  "futures-lite",
@@ -528,6 +528,7 @@ dependencies = [
  "log",
  "mirajazz",
  "openaction",
+ "serde_json",
  "simplelog",
  "tokio",
  "tokio-util",
