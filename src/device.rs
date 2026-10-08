@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     DEVICES, TOKENS,
-    mappings::{COL_COUNT, CandidateDevice, ENCODER_COUNT, INFOBAR_COUNT, INPUT_KEY_COUNT, KEY_COUNT, KEY_SIZE, LCD_IMAGE_INDEX, LCD_SIZE, ROW_COUNT, TOUCHPOINT_COUNT, editor_layout},
+    mappings::{COL_COUNT, CandidateDevice, ENCODER_COUNT, INFOBAR_COUNT, INPUT_KEY_COUNT, KEY_COUNT, KEY_SIZE, LCD_CONTENT_SIZE, LCD_IMAGE_INDEX, LCD_MARGIN, LCD_SIZE, ROW_COUNT, TOUCHPOINT_COUNT, editor_layout},
 };
 
 /// Hardware JPEG for keys and the full LCD: 4:4:4 (image crate default), q95 accepted on hardware.
@@ -321,22 +321,37 @@ pub(crate) fn decode_image(image: &str) -> Result<DynamicImage, MirajazzError> {
     Ok(load_from_memory_with_format(&body, format)?)
 }
 
-/// Composites over black (as a canvas JPEG export does), resamples only off-size input,
-/// and avoids mirajazz's nearest-neighbour resize and q90 encode.
-pub(crate) fn encode_jpeg(image: DynamicImage, size: (u32, u32)) -> Result<Vec<u8>, MirajazzError> {
+/// Composites over black (as a canvas JPEG export does) and resamples only off-size input,
+/// avoiding mirajazz's nearest-neighbour resize.
+fn flatten(image: DynamicImage, size: (u32, u32)) -> RgbImage {
     let mut pixels = RgbImage::new(image.width(), image.height());
     for (target, source) in pixels.pixels_mut().zip(image.to_rgba8().pixels()) {
         let [r, g, b, a] = source.0;
         target.0 = [r, g, b].map(|channel| ((channel as u16 * a as u16 + 127) / 255) as u8);
     }
-    let pixels = if pixels.dimensions() == size {
+    if pixels.dimensions() == size {
         pixels
     } else {
         image::imageops::resize(&pixels, size.0, size.1, FilterType::Lanczos3)
-    };
+    }
+}
+
+fn jpeg(pixels: &RgbImage) -> Result<Vec<u8>, MirajazzError> {
     let mut jpeg = Vec::new();
-    JpegEncoder::new_with_quality(&mut jpeg, JPEG_QUALITY).encode_image(&pixels)?;
+    JpegEncoder::new_with_quality(&mut jpeg, JPEG_QUALITY).encode_image(pixels)?;
     Ok(jpeg)
+}
+
+/// Encodes a key image once, at the key's display size, instead of mirajazz's q90 re-encode.
+pub(crate) fn encode_jpeg(image: DynamicImage, size: (u32, u32)) -> Result<Vec<u8>, MirajazzError> {
+    jpeg(&flatten(image, size))
+}
+
+/// Fits a strip frame to the drawable area and places it between the black side margins.
+pub(crate) fn encode_lcd(image: DynamicImage) -> Result<Vec<u8>, MirajazzError> {
+    let mut lcd = RgbImage::new(LCD_SIZE.0, LCD_SIZE.1);
+    image::imageops::replace(&mut lcd, &flatten(image, LCD_CONTENT_SIZE), LCD_MARGIN.into(), 0);
+    jpeg(&lcd)
 }
 
 /// Who is shown on a device's full LCD. A direct-drawing client (see `strip`) owns it until it
@@ -358,14 +373,14 @@ pub(crate) async fn draw_opendeck_frame(output: &impl ImageOutput, image: Option
     let image = match image {
         Some(image) => decode_image(&image)?,
         // CLE slots do not reliably blank this LCD on the calibrated firmware.
-        None => DynamicImage::ImageRgb8(RgbImage::new(LCD_SIZE.0, LCD_SIZE.1)),
+        None => DynamicImage::ImageRgb8(RgbImage::new(LCD_CONTENT_SIZE.0, LCD_CONTENT_SIZE.1)),
     };
     log::info!(
-        "event=full_lcd_frame controller=Infobar position=0 input={}x{} output={}x{} mirajazz_index={} bat_wire_slot={}",
-        image.width(), image.height(), LCD_SIZE.0, LCD_SIZE.1,
+        "event=full_lcd_frame controller=Infobar position=0 input={}x{} content={}x{} margin={} output={}x{} mirajazz_index={} bat_wire_slot={}",
+        image.width(), image.height(), LCD_CONTENT_SIZE.0, LCD_CONTENT_SIZE.1, LCD_MARGIN, LCD_SIZE.0, LCD_SIZE.1,
         LCD_IMAGE_INDEX, LCD_IMAGE_INDEX + 1
     );
-    write_lcd_jpeg(output, &encode_jpeg(image, LCD_SIZE)?).await
+    write_lcd_jpeg(output, &encode_lcd(image)?).await
 }
 
 pub(crate) async fn write_lcd_jpeg(output: &impl ImageOutput, jpeg: &[u8]) -> Result<(), MirajazzError> {
@@ -494,7 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_png_frames_keep_single_pixel_detail_and_flatten_alpha_to_black() {
-        for (controller, position, size) in [("Infobar", 0, LCD_SIZE), ("Keypad", 14, KEY_SIZE)] {
+        for (controller, position, size, written_size, offset) in [("Infobar", 0, LCD_CONTENT_SIZE, LCD_SIZE, LCD_MARGIN), ("Keypad", 14, KEY_SIZE, KEY_SIZE, 0)] {
             let (line, transparent, row) = (size.0 / 2, size.0 / 2 + 20, size.1 / 2);
             let mut frame = image::RgbaImage::from_pixel(size.0, size.1, image::Rgba([0, 0, 0, 255]));
             for y in 0..size.1 {
@@ -509,12 +524,28 @@ mod tests {
             apply(&output, event(Some(controller), Some(position), Some(url))).await.unwrap();
 
             let written = output.1.borrow().clone().unwrap();
-            assert_eq!(written.dimensions(), size, "{controller}");
-            let luma = |x: u32| written.get_pixel(x, row).0.iter().map(|&c| c as u32).sum::<u32>() / 3;
+            assert_eq!(written.dimensions(), written_size, "{controller}");
+            let luma = |x: u32| written.get_pixel(x + offset, row).0.iter().map(|&c| c as u32).sum::<u32>() / 3;
             assert!(luma(line) > 230, "{controller}: 1px line lost intensity: {}", luma(line));
             assert!(luma(line - 2) < 25 && luma(line + 2) < 25, "{controller}: 1px line smeared: {} {}", luma(line - 2), luma(line + 2));
             assert!(luma(transparent) < 25, "{controller}: transparent pixel not flattened to black: {}", luma(transparent));
         }
+    }
+
+    #[tokio::test]
+    async fn strip_frames_keep_black_side_margins() {
+        let mut white = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(RgbImage::from_pixel(LCD_CONTENT_SIZE.0, LCD_CONTENT_SIZE.1, image::Rgb([255, 255, 255]))).write_to(&mut white, image::ImageFormat::Png).unwrap();
+        let url = format!("data:image/png,{}", white.into_inner().iter().map(|byte| format!("%{byte:02X}")).collect::<String>());
+        let output = RecordingOutput::default();
+        apply(&output, event(Some("Infobar"), Some(0), Some(url))).await.unwrap();
+
+        let written = output.1.borrow().clone().unwrap();
+        let luma = |x: u32| written.get_pixel(x, 42).0.iter().map(|&c| c as u32).sum::<u32>() / 3;
+        for x in (0..LCD_MARGIN - 1).chain(LCD_SIZE.0 - LCD_MARGIN + 1..LCD_SIZE.0) {
+            assert!(luma(x) < 25, "margin column {x} is lit: {}", luma(x));
+        }
+        assert!(luma(LCD_MARGIN) > 230 && luma(LCD_SIZE.0 - LCD_MARGIN - 1) > 230, "content must reach both margins");
     }
 
     #[tokio::test]

@@ -4,9 +4,10 @@
 //! `$XDG_RUNTIME_DIR/opendeck-mirabox-n1/strip.sock` (its directory is mode 0700).
 //!
 //! - `{"event":"drawStrip","device":"n1-…","image":"<data URL>"}` with an `image/svg+xml`,
-//!   `image/png` or `image/jpeg` data URL. SVG is rendered to fill the 450x85 LCD; bitmaps of
-//!   another size are resampled. The connection then owns that device's LCD: OpenDeck's
-//!   Infobar frames are kept but not shown.
+//!   `image/png` or `image/jpeg` data URL. The drawable area is 430x85 between 10-column black
+//!   side margins that the driver adds: SVG is rendered to fill it, bitmaps of another size are
+//!   resampled. The connection then owns that device's LCD: OpenDeck's Infobar frames are kept
+//!   but not shown.
 //! - `{"event":"releaseStrip","device":"n1-…"}` shows OpenDeck's latest Infobar frame again.
 //!
 //! Each request gets one reply line, `{"ok":true}` or `{"ok":false,"error":"…"}`. Closing the
@@ -37,11 +38,11 @@ use tokio_util::{
 
 use crate::{
     DEVICES,
-    device::{LCD_STATES, decode_image, draw_opendeck_frame, encode_jpeg, write_lcd_jpeg},
-    mappings::LCD_SIZE,
+    device::{LCD_STATES, decode_image, draw_opendeck_frame, encode_lcd, write_lcd_jpeg},
+    mappings::{LCD_CONTENT_SIZE, LCD_MARGIN},
 };
 
-/// Largest accepted request line; a 450x85 frame as base64 PNG or as SVG is far below this.
+/// Largest accepted request line; a strip frame as base64 PNG or as SVG is far below this.
 const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 static FONTS: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
@@ -125,7 +126,7 @@ async fn handle_request(connection: u64, line: &str, owned: &mut HashSet<String>
     match request["event"].as_str() {
         Some("drawStrip") => {
             let image = request["image"].as_str().ok_or("missing image")?;
-            let jpeg = encode_jpeg(render(image)?, LCD_SIZE).map_err(|err| err.to_string())?;
+            let jpeg = encode_lcd(render(image)?).map_err(|err| err.to_string())?;
             draw(connection, device, jpeg).await?;
             owned.insert(device.to_owned());
             Ok(())
@@ -149,7 +150,7 @@ fn render(image: &str) -> Result<DynamicImage, String> {
     let options = usvg::Options { fontdb: FONTS.clone(), ..Default::default() };
     let tree = usvg::Tree::from_data(&svg, &options).map_err(|err| format!("invalid SVG: {err}"))?;
 
-    let (width, height) = LCD_SIZE;
+    let (width, height) = LCD_CONTENT_SIZE;
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or("cannot allocate LCD frame")?;
     let scale = tiny_skia::Transform::from_scale(width as f32 / tree.size().width(), height as f32 / tree.size().height());
     resvg::render(&tree, scale, &mut pixmap.as_mut());
@@ -168,7 +169,7 @@ async fn draw(connection: u64, id: &str, jpeg: Vec<u8>) -> Result<(), String> {
     write_lcd_jpeg(device, &jpeg).await.map_err(|err| err.to_string())?;
     lcd.owner = Some(connection);
     lcd.direct = Some(jpeg);
-    log::info!("event=direct_strip_frame device={id} connection={connection} output={}x{}", LCD_SIZE.0, LCD_SIZE.1);
+    log::info!("event=direct_strip_frame device={id} connection={connection} content={}x{} margin={LCD_MARGIN}", LCD_CONTENT_SIZE.0, LCD_CONTENT_SIZE.1);
     Ok(())
 }
 
@@ -199,17 +200,17 @@ mod tests {
 
     #[test]
     fn native_svg_keeps_single_pixel_lines_and_other_sizes_fill_the_lcd() {
-        let line = svg_url(r##"<svg xmlns="http://www.w3.org/2000/svg" width="450" height="85"><rect width="450" height="85"/><rect x="200" width="1" height="85" fill="#fff"/></svg>"##);
+        let line = svg_url(r##"<svg xmlns="http://www.w3.org/2000/svg" width="430" height="85"><rect width="430" height="85"/><rect x="200" width="1" height="85" fill="#fff"/></svg>"##);
         let frame = render(&line).unwrap().to_rgba8();
-        assert_eq!(frame.dimensions(), LCD_SIZE);
+        assert_eq!(frame.dimensions(), LCD_CONTENT_SIZE);
         assert_eq!(frame.get_pixel(200, 42).0, [255, 255, 255, 255]);
         assert_eq!(frame.get_pixel(199, 42).0, [0, 0, 0, 255]);
         assert_eq!(frame.get_pixel(201, 42).0, [0, 0, 0, 255]);
 
         let small = svg_url(r##"<svg xmlns="http://www.w3.org/2000/svg" width="90" height="17"><rect width="90" height="17" fill="#f00"/></svg>"##);
         let frame = render(&small).unwrap().to_rgba8();
-        assert_eq!(frame.dimensions(), LCD_SIZE);
-        assert_eq!(frame.get_pixel(449, 84).0, [255, 0, 0, 255]);
+        assert_eq!(frame.dimensions(), LCD_CONTENT_SIZE);
+        assert_eq!(frame.get_pixel(429, 84).0, [255, 0, 0, 255]);
     }
 
     #[tokio::test]

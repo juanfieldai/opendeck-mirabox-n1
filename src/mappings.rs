@@ -16,6 +16,10 @@ pub const INFOBAR_COUNT: usize = 1;
 /// Mirajazz index 15 becomes BAT wire slot 16; it is not an encoder display.
 pub const LCD_IMAGE_INDEX: u8 = 15;
 pub const LCD_SIZE: (u32, u32) = (450, 85);
+/// Black columns kept on each side of the LCD; every strip frame is drawn between them.
+pub const LCD_MARGIN: u32 = 10;
+/// Drawable strip area: OpenDeck and direct frames are fitted to it, then placed at `LCD_MARGIN`.
+pub const LCD_CONTENT_SIZE: (u32, u32) = (LCD_SIZE.0 - 2 * LCD_MARGIN, LCD_SIZE.1);
 /// Calibrated on MSD NEO (`0b00:1004`, firmware V3.MSD-NEO.02.011): edge-marker patterns fit
 /// exactly at 105x100, upright, no mirror. Upstream used 108x104 for `6603:1000`; Mirabox's SDK says 96x96.
 pub const KEY_SIZE: (u32, u32) = (105, 100);
@@ -33,7 +37,7 @@ pub fn editor_layout() -> serde_json::Value {
     serde_json::json!({
         "rows": rows,
         "keySize": [KEY_SIZE.0, KEY_SIZE.1],
-        "infobarSize": [LCD_SIZE.0, LCD_SIZE.1],
+        "infobarSize": [LCD_CONTENT_SIZE.0, LCD_CONTENT_SIZE.1],
         "lossless": true,
     })
 }
