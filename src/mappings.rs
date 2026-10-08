@@ -16,8 +16,13 @@ pub const INFOBAR_COUNT: usize = 1;
 /// Mirajazz index 15 becomes BAT wire slot 16; it is not an encoder display.
 pub const LCD_IMAGE_INDEX: u8 = 15;
 pub const LCD_SIZE: (u32, u32) = (450, 85);
-/// Black columns kept on each side of the LCD; every strip frame is drawn between them.
-pub const LCD_MARGIN: u32 = 10;
+/// Columns hidden behind the MSD NEO bezel on each side: in a 5-column ruler test the first
+/// visible band was columns 20-24.
+pub const LCD_HIDDEN_COLUMNS: u32 = 20;
+/// Visible black gap kept on each side between the bezel and the drawn content.
+pub const LCD_VISIBLE_MARGIN: u32 = 10;
+/// Black columns on each side of every strip frame.
+pub const LCD_MARGIN: u32 = LCD_HIDDEN_COLUMNS + LCD_VISIBLE_MARGIN;
 /// Drawable strip area: OpenDeck and direct frames are fitted to it, then placed at `LCD_MARGIN`.
 pub const LCD_CONTENT_SIZE: (u32, u32) = (LCD_SIZE.0 - 2 * LCD_MARGIN, LCD_SIZE.1);
 /// Calibrated on MSD NEO (`0b00:1004`, firmware V3.MSD-NEO.02.011): edge-marker patterns fit

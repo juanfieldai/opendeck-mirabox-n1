@@ -28,16 +28,17 @@ image index 15 (BAT wire slot 16). This canvas was physically calibrated by the 
 MSD NEO firmware above; it is **not manufacturer-confirmed native pixel resolution** and does
 not prove the same LCD dimensions on the other USB variants or firmware revisions.
 
-Every strip image is drawn into a **430×85 drawable area** between 10-column black side
-margins that the driver adds, so the first and last ten columns always stay black whatever the
-image source.
+Every strip image is drawn into a **390×85 drawable area** (columns 30–419) between black side
+margins that the driver adds. On the MSD NEO about 20 columns on each side are hidden behind
+the bezel (in a 5-column ruler test the first visible band was columns 20–24), so each margin
+is those 20 hidden columns plus a 10-column visible gap, whatever the image source.
 
 Drag the **Full LCD** action into the native Infobar (the strip below A, B and the knob). Its default
-430×85 SVG marks the drawable area with an edge border and colored corner markers. Use OpenDeck's normal state-image
+390×85 SVG marks the drawable area with an edge border and colored corner markers. Use OpenDeck's normal state-image
 picker to replace it with your image; no title is overlaid. OpenDeck renders the state image
 through its standard pipeline. This driver accepts that frame as PNG or JPEG, composites any
 transparency over black, and encodes the LCD JPEG itself once (quality 95, 4:4:4 chroma).
-Native 430×85 frames are not resampled; other sizes are resized with Lanczos3. There are no
+Native 390×85 frames are not resampled; other sizes are resized with Lanczos3. There are no
 three-tile aliases or encoder display slots. Images and clears for
 Keypad 15/16 or Encoder 0 are ignored, so input actions cannot overwrite the LCD.
 Clearing Infobar 0 writes and flushes a black 450×85 JPEG rather than a CLE slot command.
@@ -46,7 +47,7 @@ Clearing Infobar 0 writes and flushes a black 450×85 JPEG rather than a CLE slo
 
 OpenDeck rasterizes the Infobar itself at 248×58 before this driver receives it, and enlarging
 that cannot make it sharp. Plugins can therefore draw the strip **directly** through
-this driver, which renders the image at the native 430×85 drawable size and sends it straight to the device.
+this driver, which renders the image at the native 390×85 drawable size and sends it straight to the device.
 This works with unmodified OpenDeck.
 
 The driver listens on a Unix socket (Linux/macOS) at
@@ -59,7 +60,7 @@ Requests are newline-delimited JSON; each gets one reply line, `{"ok":true}` or
 {"event":"releaseStrip","device":"n1-<serial>"}
 ```
 
-- `image` is an SVG, PNG or JPEG data URL. SVG is rendered to fill the 430×85 drawable area (system fonts are
+- `image` is an SVG, PNG or JPEG data URL. SVG is rendered to fill the 390×85 drawable area (system fonts are
   available); bitmaps of another size are resampled with Lanczos3.
 - The connection that draws first owns that device's strip; `drawStrip` from another
   connection is rejected until the owner releases it or disconnects.
@@ -76,7 +77,7 @@ preview and as the fallback. [Muxboard](https://github.com/juanfieldai/muxboard)
 
 The plugin also declares the N1's physical layout and display sizes in `registerDevice`
 through an optional `layout` field: A, B and the knob on the top row, the LCD strip below them,
-then the 5×3 keypad, with keys at 105×100, the strip drawn at 430×85 and lossless PNG frames.
+then the 5×3 keypad, with keys at 105×100, the strip drawn at 390×85 and lossless PNG frames.
 Stock OpenDeck 2.14.0 ignores the field: the editor keeps its default arrangement (keypad, then
 knob, then A/strip/B) and keys arrive as 144×144 JPEG, which this driver downscales to 105×100
 with Lanczos3. Only an OpenDeck build with generic `layout` support applies it.

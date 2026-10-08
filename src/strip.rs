@@ -4,10 +4,10 @@
 //! `$XDG_RUNTIME_DIR/opendeck-mirabox-n1/strip.sock` (its directory is mode 0700).
 //!
 //! - `{"event":"drawStrip","device":"n1-…","image":"<data URL>"}` with an `image/svg+xml`,
-//!   `image/png` or `image/jpeg` data URL. The drawable area is 430x85 between 10-column black
-//!   side margins that the driver adds: SVG is rendered to fill it, bitmaps of another size are
-//!   resampled. The connection then owns that device's LCD: OpenDeck's Infobar frames are kept
-//!   but not shown.
+//!   `image/png` or `image/jpeg` data URL. The drawable area is `LCD_CONTENT_SIZE` (390x85)
+//!   between the black side margins the driver adds: SVG is rendered to fill it, bitmaps of
+//!   another size are resampled. The connection then owns that device's LCD: OpenDeck's
+//!   Infobar frames are kept but not shown.
 //! - `{"event":"releaseStrip","device":"n1-…"}` shows OpenDeck's latest Infobar frame again.
 //!
 //! Each request gets one reply line, `{"ok":true}` or `{"ok":false,"error":"…"}`. Closing the
@@ -200,7 +200,8 @@ mod tests {
 
     #[test]
     fn native_svg_keeps_single_pixel_lines_and_other_sizes_fill_the_lcd() {
-        let line = svg_url(r##"<svg xmlns="http://www.w3.org/2000/svg" width="430" height="85"><rect width="430" height="85"/><rect x="200" width="1" height="85" fill="#fff"/></svg>"##);
+        let (width, height) = LCD_CONTENT_SIZE;
+        let line = svg_url(&format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><rect width="{width}" height="{height}"/><rect x="200" width="1" height="{height}" fill="#fff"/></svg>"##));
         let frame = render(&line).unwrap().to_rgba8();
         assert_eq!(frame.dimensions(), LCD_CONTENT_SIZE);
         assert_eq!(frame.get_pixel(200, 42).0, [255, 255, 255, 255]);
@@ -210,7 +211,7 @@ mod tests {
         let small = svg_url(r##"<svg xmlns="http://www.w3.org/2000/svg" width="90" height="17"><rect width="90" height="17" fill="#f00"/></svg>"##);
         let frame = render(&small).unwrap().to_rgba8();
         assert_eq!(frame.dimensions(), LCD_CONTENT_SIZE);
-        assert_eq!(frame.get_pixel(429, 84).0, [255, 0, 0, 255]);
+        assert_eq!(frame.get_pixel(width - 1, height - 1).0, [255, 0, 0, 255]);
     }
 
     #[tokio::test]
