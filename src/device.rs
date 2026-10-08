@@ -1,13 +1,13 @@
 use data_url::DataUrl;
-use image::load_from_memory_with_format;
-use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate};
+use image::{DynamicImage, RgbImage, load_from_memory_with_format};
+use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate, types::ImageFormat};
 use openaction::{OUTBOUND_EVENT_MANAGER, SetImageEvent};
 use std::time::{Duration, SystemTime};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     DEVICES, TOKENS,
-    mappings::{COL_COUNT, CandidateDevice, ENCODER_COUNT, KEY_COUNT, Kind, ROW_COUNT},
+    mappings::{COL_COUNT, CandidateDevice, ENCODER_COUNT, INFOBAR_COUNT, INPUT_KEY_COUNT, KEY_COUNT, Kind, LCD_IMAGE_INDEX, ROW_COUNT, TOUCHPOINT_COUNT},
 };
 
 /// Keep-alive loop period.
@@ -71,22 +71,27 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
             }
         };
 
+        DEVICES.write().await.insert(candidate.id.clone(), device);
         log::info!("Registering device {}", candidate.id);
         if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
+            // openaction 1.1.5's register_device omits touchpoints and infobars.
             outbound
-                .register_device(
-                    candidate.id.clone(),
-                    candidate.kind.human_name(),
-                    ROW_COUNT as u8,
-                    COL_COUNT as u8,
-                    ENCODER_COUNT as u8,
-                    0,
-                )
+                .send_event(serde_json::json!({
+                    "event": "registerDevice",
+                    "payload": {
+                        "id": candidate.id,
+                        "name": candidate.kind.human_name(),
+                        "rows": ROW_COUNT,
+                        "columns": COL_COUNT,
+                        "encoders": ENCODER_COUNT,
+                        "touchpoints": TOUCHPOINT_COUNT,
+                        "infobars": INFOBAR_COUNT,
+                        "type": 0
+                    }
+                }))
                 .await
                 .unwrap();
         }
-
-        DEVICES.write().await.insert(candidate.id.clone(), device);
 
         // After a resume the N1 firmware is back in its default mode and won't deliver input over
         // the existing handle, so we tear everything down and reconnect from scratch — an in-place
@@ -194,7 +199,7 @@ pub async fn connect(candidate: &CandidateDevice) -> Result<Device, MirajazzErro
     let result = Device::connect(
         &candidate.dev,
         candidate.kind.protocol_version(),
-        KEY_COUNT,
+        INPUT_KEY_COUNT,
         ENCODER_COUNT,
     )
     .await;
@@ -267,58 +272,186 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
     Ok(())
 }
 
-/// Handles different combinations of "set image" event, including clearing the specific buttons and whole device
-pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(), MirajazzError> {
-    let kind = Kind::from_vid_pid(device.vid, device.pid).unwrap(); // Safe: device is already filtered
+/// Device writes are kept behind this narrow interface so tests exercise the image consumer
+/// without opening a HID handle.
+trait ImageOutput {
+    async fn draw(&self, index: u8, format: ImageFormat, image: DynamicImage) -> Result<(), MirajazzError>;
+    async fn clear_key(&self, index: u8) -> Result<(), MirajazzError>;
+    async fn clear_keys(&self) -> Result<(), MirajazzError>;
+    async fn flush_images(&self) -> Result<(), MirajazzError>;
+}
 
-    // Encoder ("knob"/button) images are drawn on the screen-strip segments, which live at device
-    // indices right after the keys. Keypad images use the position as-is.
-    let is_encoder = evt.controller.as_deref() == Some("Encoder");
-    let device_index = |position: u8| -> u8 {
-        if is_encoder {
-            KEY_COUNT as u8 + position
-        } else {
-            position
-        }
-    };
-    let format = if is_encoder {
-        kind.encoder_image_format()
-    } else {
-        kind.image_format()
-    };
-
-    match (evt.position, evt.image) {
-        (Some(position), Some(image)) => {
-            log::info!("Setting image for {} {}", if is_encoder { "encoder" } else { "button" }, position);
-
-            // OpenDeck sends image as a data url, so parse it using a library
-            let url = DataUrl::process(image.as_str()).unwrap(); // Isn't expected to fail, so unwrap it is
-            let (body, _fragment) = url.decode_to_vec().unwrap(); // Same here
-
-            // Allow only image/jpeg mime for now
-            if url.mime_type().subtype != "jpeg" {
-                log::error!("Incorrect mime type: {}", url.mime_type());
-
-                return Ok(()); // Not a fatal error, enough to just log it
-            }
-
-            let image = load_from_memory_with_format(body.as_slice(), image::ImageFormat::Jpeg)?;
-
-            device
-                .set_button_image(device_index(position), format, image)
-                .await?;
-            device.flush().await?;
-        }
-        (Some(position), None) => {
-            device.clear_button_image(device_index(position)).await?;
-            device.flush().await?;
-        }
-        (None, None) => {
-            device.clear_all_button_images().await?;
-            device.flush().await?;
-        }
-        _ => {}
+impl ImageOutput for Device {
+    async fn draw(&self, index: u8, format: ImageFormat, image: DynamicImage) -> Result<(), MirajazzError> {
+        self.set_button_image(index, format, image).await
     }
 
-    Ok(())
+    async fn clear_key(&self, index: u8) -> Result<(), MirajazzError> {
+        self.clear_button_image(index).await
+    }
+
+    async fn clear_keys(&self) -> Result<(), MirajazzError> {
+        self.clear_all_button_images().await
+    }
+
+    async fn flush_images(&self) -> Result<(), MirajazzError> {
+        self.flush().await
+    }
+}
+
+fn decode_image(image: &str) -> Result<DynamicImage, MirajazzError> {
+    let url = DataUrl::process(image).map_err(|_| MirajazzError::BadData)?;
+    if url.mime_type().type_ != "image" || url.mime_type().subtype != "jpeg" {
+        return Err(MirajazzError::BadData);
+    }
+    let (body, _) = url.decode_to_vec().map_err(|_| MirajazzError::BadData)?;
+    Ok(load_from_memory_with_format(&body, image::ImageFormat::Jpeg)?)
+}
+
+async fn draw_lcd(output: &impl ImageOutput, kind: &Kind, image: Option<String>) -> Result<(), MirajazzError> {
+    let format = kind.infobar_image_format();
+    let image = match image {
+        Some(image) => decode_image(&image)?,
+        // CLE slots do not reliably blank this LCD on the calibrated firmware.
+        None => DynamicImage::ImageRgb8(RgbImage::new(format.size.0 as u32, format.size.1 as u32)),
+    };
+    log::info!(
+        "event=full_lcd_frame controller=Infobar position=0 input={}x{} output={}x{} mirajazz_index={} bat_wire_slot={}",
+        image.width(), image.height(), format.size.0, format.size.1,
+        LCD_IMAGE_INDEX, LCD_IMAGE_INDEX + 1
+    );
+    output.draw(LCD_IMAGE_INDEX, format, image).await?;
+    output.flush_images().await
+}
+
+async fn apply_image(output: &impl ImageOutput, kind: &Kind, evt: SetImageEvent) -> Result<(), MirajazzError> {
+    match (evt.controller.as_deref(), evt.position) {
+        (Some("Encoder"), Some(0) | None) => Ok(()),
+        (Some("Infobar"), Some(0)) => draw_lcd(output, kind, evt.image).await,
+        (Some("Infobar"), None) if evt.image.is_none() => draw_lcd(output, kind, None).await,
+        (Some("Keypad") | None, Some(position)) if (position as usize) < INPUT_KEY_COUNT => {
+            if position as usize >= KEY_COUNT {
+                return Ok(()); // Touch points have no display, even though their indices overlap BAT slots.
+            }
+            match evt.image {
+                Some(image) => output.draw(position, kind.image_format(), decode_image(&image)?).await?,
+                None => output.clear_key(position).await?,
+            }
+            output.flush_images().await
+        }
+        (Some("Keypad") | None, None) if evt.image.is_none() => {
+            output.clear_keys().await?;
+            draw_lcd(output, kind, None).await
+        }
+        _ => Err(MirajazzError::BadData),
+    }
+}
+
+/// Only Infobar 0 owns the full LCD. Input-only controllers never draw into its BAT slot.
+pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(), MirajazzError> {
+    let kind = Kind::from_vid_pid(device.vid, device.pid).ok_or(MirajazzError::BadData)?;
+    apply_image(device, &kind, evt).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::RefCell, fmt::Write, io::Cursor};
+    use mirajazz::images::convert_image_with_format;
+
+    #[derive(Debug, PartialEq)]
+    enum WriteOperation {
+        Draw(u8, u32, u32, [u8; 3]),
+        Clear(u8),
+        ClearAll,
+        Flush,
+    }
+
+    #[derive(Default)]
+    struct RecordingOutput(RefCell<Vec<WriteOperation>>);
+
+    impl ImageOutput for RecordingOutput {
+        async fn draw(&self, index: u8, format: ImageFormat, image: DynamicImage) -> Result<(), MirajazzError> {
+            // Exercise the same JPEG conversion as Device::set_button_image.
+            let bytes = convert_image_with_format(format, image).await?;
+            let jpeg = load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)?.to_rgb8();
+            self.0.borrow_mut().push(WriteOperation::Draw(index, jpeg.width(), jpeg.height(), jpeg.get_pixel(0, 0).0));
+            Ok(())
+        }
+
+        async fn clear_key(&self, index: u8) -> Result<(), MirajazzError> {
+            self.0.borrow_mut().push(WriteOperation::Clear(index));
+            Ok(())
+        }
+
+        async fn clear_keys(&self) -> Result<(), MirajazzError> {
+            self.0.borrow_mut().push(WriteOperation::ClearAll);
+            Ok(())
+        }
+
+        async fn flush_images(&self) -> Result<(), MirajazzError> {
+            self.0.borrow_mut().push(WriteOperation::Flush);
+            Ok(())
+        }
+    }
+
+    fn event(controller: Option<&str>, position: Option<u8>, image: Option<String>) -> SetImageEvent {
+        SetImageEvent { device: "n1-test".into(), controller: controller.map(str::to_owned), position, image }
+    }
+
+    fn black_jpeg_url() -> String {
+        let mut jpeg = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(RgbImage::new(12, 12)).write_to(&mut jpeg, image::ImageFormat::Jpeg).unwrap();
+        let mut url = String::from("data:image/jpeg,");
+        for byte in jpeg.into_inner() {
+            write!(&mut url, "%{byte:02X}").unwrap();
+        }
+        url
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn only_infobar_image_writes_full_lcd_without_input_controller_collisions() {
+        let output = RecordingOutput::default();
+        apply_image(&output, &Kind::N1, event(Some("Infobar"), Some(0), Some(black_jpeg_url()))).await.unwrap();
+        for (controller, position) in [("Keypad", 15), ("Keypad", 16), ("Encoder", 0)] {
+            for image in [Some("not a data URL".into()), None] {
+                apply_image(&output, &Kind::N1, event(Some(controller), Some(position), image)).await.unwrap();
+            }
+        }
+        assert_eq!(*output.0.borrow(), [WriteOperation::Draw(15, 450, 85, [0, 0, 0]), WriteOperation::Flush]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn infobar_clear_draws_and_flushes_black_jpeg_instead_of_cle() {
+        let output = RecordingOutput::default();
+        apply_image(&output, &Kind::N1, event(Some("Infobar"), Some(0), None)).await.unwrap();
+        assert_eq!(*output.0.borrow(), [WriteOperation::Draw(15, 450, 85, [0, 0, 0]), WriteOperation::Flush]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn whole_device_clear_also_blanks_full_lcd() {
+        let output = RecordingOutput::default();
+        apply_image(&output, &Kind::N1, event(None, None, None)).await.unwrap();
+        assert_eq!(*output.0.borrow(), [WriteOperation::ClearAll, WriteOperation::Draw(15, 450, 85, [0, 0, 0]), WriteOperation::Flush]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn keypad_images_keep_their_existing_geometry_and_clear_slot() {
+        let output = RecordingOutput::default();
+        apply_image(&output, &Kind::N1, event(Some("Keypad"), Some(14), Some(black_jpeg_url()))).await.unwrap();
+        apply_image(&output, &Kind::N1, event(Some("Keypad"), Some(14), None)).await.unwrap();
+        assert_eq!(*output.0.borrow(), [WriteOperation::Draw(14, 108, 104, [0, 0, 0]), WriteOperation::Flush, WriteOperation::Clear(14), WriteOperation::Flush]);
+    }
+
+    #[tokio::test]
+    async fn invalid_positions_and_malformed_images_fail_without_drawing() {
+        let output = RecordingOutput::default();
+        for (controller, position) in [("Infobar", Some(1)), ("Infobar", None), ("Keypad", Some(17)), ("Encoder", Some(1)), ("Unknown", Some(0))] {
+            assert!(matches!(apply_image(&output, &Kind::N1, event(Some(controller), position, Some(black_jpeg_url()))).await, Err(MirajazzError::BadData)));
+        }
+        for image in ["not a data URL", "data:image/jpeg;base64,%%%", "data:text/jpeg,test"] {
+            assert!(matches!(apply_image(&output, &Kind::N1, event(Some("Infobar"), Some(0), Some(image.into()))).await, Err(MirajazzError::BadData)));
+        }
+        assert!(output.0.borrow().is_empty());
+    }
 }

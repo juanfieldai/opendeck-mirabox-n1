@@ -7,11 +7,15 @@ use mirajazz::{
 pub const DEVICE_NAMESPACE: &str = "n1";
 
 // Mirabox N1: 15 LCD keys arranged like a numpad — 5 rows x 3 columns.
-// Encoders (3): 0 = knob (rotate + press), 1 = extra button A, 2 = extra button B.
+// A/B are screenless touch points; the knob is the only encoder.
 pub const ROW_COUNT: usize = 5;
 pub const COL_COUNT: usize = 3;
 pub const KEY_COUNT: usize = ROW_COUNT * COL_COUNT;
-pub const ENCODER_COUNT: usize = 3;
+pub const TOUCHPOINT_COUNT: usize = 2;
+pub const INPUT_KEY_COUNT: usize = KEY_COUNT + TOUCHPOINT_COUNT;
+pub const ENCODER_COUNT: usize = 1;
+pub const INFOBAR_COUNT: usize = 1;
+pub const LCD_IMAGE_INDEX: u8 = 15;
 
 #[derive(Debug, Clone)]
 pub enum Kind {
@@ -35,6 +39,7 @@ pub struct DeviceSpec {
 pub const SPECS: &[DeviceSpec] = &[
     DeviceSpec { vid: 0x6603, pid: 0x1000, kind: Kind::N1 },
     DeviceSpec { vid: 0x0300, pid: 0x3007, kind: Kind::N1 },
+    DeviceSpec { vid: 0x0b00, pid: 0x1004, kind: Kind::N1 },
 ];
 
 /// HID queries for every supported device, derived from `SPECS`.
@@ -96,13 +101,12 @@ impl Kind {
         }
     }
 
-    /// Image format for the screen-strip segments (one slot per encoder). The strip shares the
-    /// keys' image protocol; segments live at device indices KEY_COUNT + encoder_position.
-    /// 80x80 centers each segment over its column (determined on hardware).
-    pub fn encoder_image_format(&self) -> ImageFormat {
+    /// Calibrated full-LCD canvas on MSD NEO firmware V3.MSD-NEO.02.011.
+    /// Mirajazz index 15 becomes BAT wire slot 16; it is not an encoder display.
+    pub fn infobar_image_format(&self) -> ImageFormat {
         ImageFormat {
             mode: ImageMode::JPEG,
-            size: (80, 80),
+            size: (450, 85),
             rotation: ImageRotation::Rot0,
             mirror: ImageMirroring::None,
         }

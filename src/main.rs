@@ -48,14 +48,10 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
     ) -> EventHandlerResult {
         log::debug!("Asked to set image: {:#?}", event);
 
-        // Encoder images are drawn on the N1's screen-strip segments (handled in handle_set_image).
-        let id = event.device.clone();
-
         if let Some(device) = DEVICES.read().await.get(&event.device) {
-            handle_set_image(device, event)
-                .await
-                .map_err(async |err| handle_error(&id, err).await)
-                .ok();
+            // OpenAction owns the outbound lock during callbacks; return errors to its
+            // dispatcher instead of re-entering handle_error's global outbound lock.
+            handle_set_image(device, event).await?;
         } else {
             log::error!("Received event for unknown device: {}", event.device);
         }
