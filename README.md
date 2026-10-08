@@ -41,7 +41,7 @@ Clearing Infobar 0 writes and flushes a black 450×85 JPEG rather than a CLE slo
 **Display-quality requirement:** stock OpenDeck 2.14.0 rasterizes the Infobar at 248×58 and
 keys at 144×144, and exports both as lossy JPEG, so text detail is already lost before this
 driver resizes them. Sharp automatic output needs an OpenDeck build that renders `n1-` Infobars
-at 450×85 and keys at 108×104 and exports them as PNG (a frontend change in `DeviceView.svelte`
+at 450×85 and keys at 105×100 and exports them as PNG (a frontend change in `DeviceView.svelte`
 and `rendererHelper.ts`). That OpenDeck change is not part of this plugin.
 
 ## Breaking profile migration (0.3.0)
@@ -59,8 +59,11 @@ migrated and encoder/touch-point images no longer provide strip tiles.
 - The device boots into its built-in numpad layer. The plugin sends a mode-switch command on
   connect to put it into the "PC / stream-dock" mode where host images are displayed, and a
   periodic keep-alive so it doesn't drop off the USB bus.
-- Key LCD resolution is 108×104, displayed upright (no rotation/mirroring). Key images use the
-  same single JPEG encode as the full LCD (native frames are not resampled; others use Lanczos3).
+- Key images are 105×100, displayed upright (no rotation/mirroring). This was calibrated on the
+  MSD NEO above with one-pixel edge markers: 105×100 fit all four edges exactly, while larger
+  images were cropped or ignored. Upstream used 108×104 for `6603:1000` and Mirabox's SDK states
+  96×96; neither was confirmed on this unit. Key images use the same single JPEG encode as the
+  full LCD (native frames are not resampled; others use Lanczos3).
 - Mode 3 initialization, the two-second keep-alive, and full reconnect after host suspend
   retain the upstream behavior.
 - Malformed image data URLs, MIME types other than JPEG/PNG, and out-of-range controller

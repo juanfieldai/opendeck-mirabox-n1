@@ -16,8 +16,9 @@ pub const INFOBAR_COUNT: usize = 1;
 /// Mirajazz index 15 becomes BAT wire slot 16; it is not an encoder display.
 pub const LCD_IMAGE_INDEX: u8 = 15;
 pub const LCD_SIZE: (u32, u32) = (450, 85);
-/// Determined on hardware: N1 key LCDs are 108x104 (landscape), upright, no mirror.
-pub const KEY_SIZE: (u32, u32) = (108, 104);
+/// Calibrated on MSD NEO (`0b00:1004`, firmware V3.MSD-NEO.02.011): edge-marker patterns fit
+/// exactly at 105x100, upright, no mirror. Upstream used 108x104 for `6603:1000`; Mirabox's SDK says 96x96.
+pub const KEY_SIZE: (u32, u32) = (105, 100);
 
 #[derive(Debug, Clone)]
 pub enum Kind {

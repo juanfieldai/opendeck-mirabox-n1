@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Encode key and full-LCD images once (quality 95, 4:4:4) instead of mirajazz's
+  nearest-neighbour resize plus quality-90 re-encode; accept lossless PNG frames and skip
+  resampling for native-size input.
+- Key images are now 105×100, calibrated on the MSD NEO (`0b00:1004`) with edge-marker
+  patterns: 105×100 fills the key exactly, so the previous 108×104 exceeded the visible area.
+
 ## [0.3.0] - 2026-10-08
 
 - Juan Field AI fork of Sergey Ovechkin's N1 plugin; new plugin/package UUID

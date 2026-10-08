@@ -495,7 +495,7 @@ mod tests {
         let output = RecordingOutput::default();
         apply_image(&output, event(Some("Keypad"), Some(14), Some(black_jpeg_url()))).await.unwrap();
         apply_image(&output, event(Some("Keypad"), Some(14), None)).await.unwrap();
-        assert_eq!(*output.0.borrow(), [WriteOperation::Draw(14, 108, 104, [0, 0, 0]), WriteOperation::Flush, WriteOperation::Clear(14), WriteOperation::Flush]);
+        assert_eq!(*output.0.borrow(), [WriteOperation::Draw(14, 105, 100, [0, 0, 0]), WriteOperation::Flush, WriteOperation::Clear(14), WriteOperation::Flush]);
     }
 
     #[tokio::test]
